@@ -8,6 +8,13 @@ ModelScope measured 44 MB/s+ on the same box for the same checkpoint. Every file
 hash-verified before it is admitted, so the transport cannot change what we serve.
 
 Re-runnable: completed blobs are skipped.
+
+Configuration (env):
+  SEED_REPO   HF repo id                (default: RadixArk/Qwen3.8-Flash-Next-NVFP4)
+  SEED_REV    pinned revision / commit  (default: the flash-lane pin)
+  SEED_TAG    names the status/log file (default: "default")
+  SEED_WORKERS parallel downloads       (default: 12)
+  HF_CACHE    cache root                (default: ~/.cache/huggingface)
 """
 import hashlib
 import json
@@ -20,15 +27,17 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-REPO = "RadixArk/Qwen3.8-Flash-Next-NVFP4"
-REV = "7b719225242aacd3dbd3f9407468c2ee9a9d2594"
+REPO = os.environ.get("SEED_REPO", "RadixArk/Qwen3.8-Flash-Next-NVFP4")
+REV = os.environ.get("SEED_REV", "7b719225242aacd3dbd3f9407468c2ee9a9d2594")
+TAG = os.environ.get("SEED_TAG", "default")
 HF_CACHE = os.path.expanduser(os.environ.get("HF_CACHE", "~/.cache/huggingface"))
-CACHE = os.path.join(HF_CACHE, "hub", "models--" + REPO.replace("/", "--"))
+SLUG = REPO.replace("/", "--")
+CACHE = os.path.join(HF_CACHE, "hub", "models--" + SLUG)
 BLOBS = os.path.join(CACHE, "blobs")
 SNAP = os.path.join(CACHE, "snapshots", REV)
 WORK = os.path.expanduser("~/dsh-work")
-STATUS = os.path.join(WORK, "seed-status.json")
-LOG = os.path.join(WORK, "seed.log")
+STATUS = os.path.join(WORK, f"seed-status-{TAG}.json")
+LOG = os.path.join(WORK, f"seed-{TAG}.log")
 WORKERS = int(os.environ.get("SEED_WORKERS", "12"))
 UA = "Mozilla/5.0 (X11; Linux aarch64) hf-seeder/1.0"
 
@@ -208,7 +217,11 @@ def main():
         os.makedirs(os.path.dirname(target), exist_ok=True)
         if os.path.islink(target) or os.path.exists(target):
             os.unlink(target)
-        os.symlink(os.path.join("..", "..", "blobs", etag), target)
+        # Relative link computed from the file's own depth: a file nested in a
+        # subdirectory needs one more ".." than one at the snapshot root. A
+        # hardcoded "../../blobs" silently produced dangling links for nested
+        # files (found on z-lab/Qwen3.8-27B-DFlash2's assets/ directory).
+        os.symlink(os.path.relpath(blob, os.path.dirname(target)), target)
     os.makedirs(os.path.join(CACHE, "refs"), exist_ok=True)
     with open(os.path.join(CACHE, "refs", "main"), "w") as f:
         f.write(REV)
