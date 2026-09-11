@@ -46,12 +46,38 @@ curl http://127.0.0.1:30000/v1/messages -H "Authorization: Bearer $KEY" ...
 
 ## 2. 实测数据（2026-09-11，贪心，关闭 thinking）
 
+单流：
+
 | 负载 | decode | TTFT |
 |---|---|---|
 | 代码生成 | **43.2 tok/s** | 136 ms |
 | 数学推理 | **51.3 tok/s** | 235 ms |
 | 技术说明文 | 22.1 tok/s | 232 ms |
-| 4 路并发聚合 | 62.8 tok/s | — |
+
+仓库自带固定基准（`bench-matrix.sh` v1，两段式差值法、扣除 prefill）：
+
+| 负载 | tok/s |
+|---|---|
+| math (EN, eval-style) | 42.7 |
+| reasoning (FR) | 43.9 |
+| code (DE) | 31.2 |
+| code (EN) | 28.3 |
+| technical explain (FR) | 25.6 |
+| free prose (EN / FR / DE) | 20.6 / 17.5 / 15.6 |
+
+并发与队列行为（**重要**：`--max-running-requests 8` 是硬上限，更多并发只排队）：
+
+| 并发 | 聚合吞吐 | TTFT 中位 | 说明 |
+|---|---|---|---|
+| 4 路 | 62.8 tok/s | — | |
+| 8 路 | **157.7 tok/s**（10 轮均值 143.5–168.4） | 477 ms | 打满上限 |
+| 16 路 | 161.4 tok/s | **7.6 s** | 后 8 路排队 |
+| 32 路 | 176.2 tok/s | **25.6 s** | 后 24 路排队 |
+
+**结论**：8 路已接近本配置的吞吐饱和点（8→32 路仅 +12%），而 TTFT 从 0.48 s 退化到 25.6 s（**慢 50 倍**）。
+对外提供多用户服务时应把并发控制在 8 附近；想真正提高聚合吞吐必须同时放宽三个参数
+（`--max-running-requests`、`--max-mamba-cache-size`、`--cuda-graph-max-bs` —— 只改第一个无效，
+batch 超过 CUDA graph 上限会退回 eager 执行）。
 
 长上下文与功能：
 
@@ -60,9 +86,14 @@ curl http://127.0.0.1:30000/v1/messages -H "Authorization: Bearer $KEY" ...
 | 25,248 token 提示 | TTFT 15.6 s，decode 26.7 tok/s，**检索命中** |
 | 83,648 token 提示 | TTFT 65.6 s，decode 18.2 tok/s，**检索命中** |
 | 工具调用 | ✅ `tool_calls` + `finish_reason: tool_calls`（`qwen3_coder`） |
-| 引擎侧指标 | accept len 3.7–4.3，accept rate 0.38–0.47，聚合 51–89 tok/s |
+| 引擎侧指标 | accept len 3.7–4.35，accept rate 0.38–0.48，峰值 gen throughput 222 tok/s |
+| 稳定性 soak | 8 路 × 10 轮，**0 错误**，宿主可用内存全程恒定 45.0 GiB（无漂移） |
 
-> 对比：被卸载的 176B Flash-Next 是代码 36.5 / 数学 44.6 / 4 路 68.3；27B 在**单流**上更快（体积小、带宽压力低），并发聚合略低（档位配置不同）。
+> **关于第三方公开数据**：社区仓库 `hasso5703/dgx-spark-qwen38` 声称 8 路聚合 135–148、32 路 258；
+> `darkdatter/gb10-repo` 声称 16 路 480.7（单流 78.6）。本机实测 8 路 157.7（**吻合**）、16 路 161.4、
+> 32 路 176.2（**明显低于后两者**）。差异的原因是配置不同：480@16 需要把 `--max-running-requests`
+> 提到 16 并同时放宽 mamba 池与 CUDA graph 上限，而本部署保持在验证过的 8 路配置。**引用这些数字时必须连同配置一起引用。**
+
 
 ## 3. 实际运行的引擎参数
 
