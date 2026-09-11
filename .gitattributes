@@ -1,0 +1,4 @@
+# Deployment scripts here are executed on Linux (DGX OS). Pin the line endings so a
+# Windows checkout with core.autocrlf=true cannot rewrite them to CRLF — that breaks
+# bash with "$'\r': command not found" and silently corrupts shell heredocs.
+* text=auto eol=lf

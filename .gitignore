@@ -1,0 +1,13 @@
+# logs and runtime output produced by these scripts
+*.log
+*.part-*
+sweep/
+seed-status.json
+
+# python
+__pycache__/
+*.pyc
+
+# local overrides
+.env
+*.local
