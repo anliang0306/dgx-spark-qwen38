@@ -21,7 +21,7 @@
 | Anthropic API | `http://<DGX_HOST>:30000/v1/messages`（只认 `Authorization: Bearer`，不认 `x-api-key`） |
 | Agent CLI 用端口 | `http://<DGX_HOST>:30001`（保活代理，opencode 等长流式客户端走这里） |
 | 模型名 | `qwen3.8-flash-next` |
-| API Key | `<YOUR_API_KEY>`（文件：`/home/anliang/.config/qwen38/api-key`） |
+| API Key | `<YOUR_API_KEY>`（文件：`~/.config/qwen38/api-key`） |
 | 上下文窗口 | 262,144 tokens（服务端）；代理侧单请求上限 200,000 tokens |
 | 并发上限 | **4**（context 档位，`--max-running-requests 4`） |
 | 投机解码 | NEXTN/MTP，draft tokens = 4，draft 词表裁剪到 65,536（`token-map-65536.pt`） |

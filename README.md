@@ -2,6 +2,9 @@
 
 在单台 NVIDIA DGX Spark（GB10）上部署 **Qwen3.8 系列**模型的完整可复现工具集：安装、权重下载加速、验证、基准与诊断脚本。
 
+> **想先看故事？** 面向非专业读者的完整实录（做错了什么、为什么这么配、实测多少速度）：
+> [`docs/deployment-story.md`](docs/deployment-story.md) —— 大白话版，无需背景知识。
+
 > 部署引擎与安装逻辑来自 [hasso5703/dgx-spark-qwen38](https://github.com/hasso5703/dgx-spark-qwen38)（MIT）。本仓库是**围绕它的部署封装与实测记录**，不含对方源码的修改版。
 
 ## 当前部署：Qwen3.8-27B-NVFP4 + DFlash2
@@ -9,16 +12,26 @@
 | | |
 |---|---|
 | 目标模型 | `RadixArk/Qwen3.8-27B-NVFP4` @ `52d1adc5…`（NVFP4 W4A4：MLP+lm_head 4bit，attention FP8） |
-| 投机 draft | `z-lab/Qwen3.8-27B-DFlash2` @ `50307d4c…`，**DFLASH，8 draft tokens** |
+| 投机 draft | `z-lab/Qwen3.8-27B-DFlash2` @ `50307d4c…`，**DFLASH，8 draft tokens**（块大小由 draft 模型决定） |
 | 引擎 | 本地构建 overlay `qwen38-dflash2:v1.2.3`（基线 `lmsysorg/sglang@sha256:febfb971…`） |
 | 服务 | `qwen38-sglang.service`（:30000）+ `qwen38-keepalive.service`（:30001） |
-| 配置 | 262,144 上下文，8 路并发，`--mem-fraction-static 0.50` |
+| 上下文 | **524,288 tokens**（YaRN 静态缩放，`factor 2.0`；原生 262,144） |
+| 并发 | **8**（`--max-running-requests 8` / `--cuda-graph-max-bs 8`） |
+| 内存 | `--mem-fraction-static 0.60`；KV 池 728,017 tokens |
 | 模型名 | `qwen3.8-27b` |
 
-**实测**（贪心、关闭 thinking）：代码 **43.2**、数学 **51.3**、说明文 22.1 tok/s；4 路聚合 62.8 tok/s；
-84k token 长上下文检索命中；工具调用正常。
+**实测**（贪心、关闭 thinking）：
 
-完整交付说明见 [`docs/handover.md`](docs/handover.md)。
+| 场景 | 结果 |
+|---|---|
+| 单流 · 代码 / 数学 / 说明文 | **43.2 / 51.3 / 22.1** tok/s |
+| 8 路并发聚合 | **157.7** tok/s（10 轮 soak 均值 143.5–168.4，**0 错误**） |
+| 16 / 32 路请求 | 161.4 / 176.2 tok/s，但首字等待劣化到 7.6 s / 25.6 s |
+| 长上下文 | 84k prompt 首字 65.6 s，检索命中 |
+| 上下文上限实测 | 340,012 token 的请求成功处理 |
+
+完整交付说明见 [`docs/handover.md`](docs/handover.md)；调优取舍（哪些有用、哪些白费）见
+[`docs/deployment-story.md`](docs/deployment-story.md) 第 5 章。
 
 <details>
 <summary>已归档：Qwen3.8-Flash-Next 176B MoE NVFP4（2026-09-11 卸载）</summary>

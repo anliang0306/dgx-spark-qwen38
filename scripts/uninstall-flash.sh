@@ -3,7 +3,7 @@
 # Run as root with HOME pinned to the deployment user, otherwise uninstall.sh
 # resolves ~/.config/qwen38 against /root.
 set -uo pipefail
-export HOME=/home/anliang
+export HOME="${DGX_TARGET_HOME:?set DGX_TARGET_HOME to the deployment user's home directory}"
 cd "$HOME/dsh-work/repo"
 
 echo "############ before ############"
