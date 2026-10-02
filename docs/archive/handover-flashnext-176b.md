@@ -8,6 +8,14 @@
 - **状态**：服务已安装、已 enabled（开机自启）、已实测通过 ✅
 - **完成时间**：2026-09-10 22:48 CST（首次启动耗时约 10.3 分钟）
 
+> ### 更新记录 · 2026-10-02：引擎升级到 SGLang v0.5.21（A/B 实测打平）
+>
+> - **做了什么**：把 flash lane 的 SGLang 镜像从首部署用的**预览分支** `dev-qwen38-next-local`（`4ccff141d`，2026-09-07）升级到**官方稳定版 `v0.5.21`**（`e00930c548`，2026-09-29）。其余参数一字未改（PLE 文件卸载、NEXTN 投机 3/1/4、draft 词表裁剪 65536、`--mem-fraction-static 0.85`、262144 上下文）。
+> - **兼容性**：`v0.5.21` 已把 **file-backed PLE 表**合进稳定线（`qwen4_exp_ple_table.py`，sglang#39126，2026-09-13），启动参数 `--ple-offload-embedding/--ple-offload-backend file/--ple-offload-dir` 与本机逐字一致，token-map 因走 `/out` 挂载、与引擎版本无关，**直接复用同一份**，实现完美对齐。
+> - **A/B 实测**（同一个上游 `bench.sh` 协议，同日）：预览版 greedy median **42.4** vs v0.5.21 **42.8**（code 40.5/44.0 vs 41.9/43.7，math 39.0/42.5 vs 41.4/44.2）→ **+0.9%，在噪声内，没有实质差异**。
+> - **诚实结论**：`bench.sh` 自己就警告"刚开机一批 38.8、后三批才 47.7–49.1"——**参考机自身跨 boot 从 28.6 飘到 49.1，"稳定 47.9" 并不存在**。本机 42 左右本就在其波动区间内。真正的方差来自 **47.7 GiB PLE 表的页缓存冷暖（开机彩票）**，不是引擎版本。换版本换不来 47.9；那条把 39.8 抬到 47.9 的杠杆（`--speculative-token-map 65536`）**本机首部署起就一直开着**。
+> - **固化**：`install.sh` 的 `FLASH_IMAGE` pin 已本地改为 `lmsysorg/sglang:v0.5.21`（该仓是上游 `hasso5703/dgx-spark-qwen38` 的克隆，**本地 commit、未 push**；上游默认仍是它验证过的预览版，如需还原删掉本地这一 commit 即可）。运行中服务的回退：还原 `~/.config/qwen38/launch-flash.sh.bak-preview` 后 `systemctl restart qwen38-flash`。
+
 ---
 
 ## 1. 结果摘要
@@ -15,7 +23,7 @@
 | 项目 | 值 |
 |---|---|
 | 模型 | `RadixArk/Qwen3.8-Flash-Next-NVFP4` @ `7b719225242aacd3dbd3f9407468c2ee9a9d2594`（176B 混合 MoE，6B 激活） |
-| 引擎 | SGLang，镜像 `lmsysorg/sglang@sha256:9d2a843c706c74bc259c0d9abf360551eb2734e1e7d255ab012a6965f10480b6`（`dev-qwen38-next-local`，官方 GB10 镜像，无本地 overlay） |
+| 引擎 | **2026-10-02 起**：SGLang 官方稳定版 `lmsysorg/sglang:v0.5.21`（commit `e00930c548`）。**首次部署时**为 `lmsysorg/sglang@sha256:9d2a843c…`（`dev-qwen38-next-local` 预览分支，`qwen4-main-squashed` `4ccff141db`）；A/B 实测两版打平，已固化升级到稳定版，见下方"更新记录"。均无本地 overlay |
 | 服务名 | `qwen38-flash.service`（引擎）、`qwen38-keepalive.service`（保活代理） |
 | OpenAI API | `http://<DGX_HOST>:30000/v1/chat/completions` |
 | Anthropic API | `http://<DGX_HOST>:30000/v1/messages`（只认 `Authorization: Bearer`，不认 `x-api-key`） |
