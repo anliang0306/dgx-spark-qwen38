@@ -3,6 +3,11 @@
 > 这篇文章记录了一台 NVIDIA DGX Spark 上从零部署本地大模型的完整过程：装了什么、为什么这么配、实测多少速度、踩了哪些坑。
 > 所有 IP、主机名、密钥、密码已替换为占位符。命令可以直接照抄，把占位符换成你自己的值即可。
 
+> ### 📌 当前运行状态（更新于 2026-10-02）
+> 这台机器**当前实际在跑的模型是 Qwen3.8-Flash-Next 176B**，引擎为官方稳定版 SGLang **v0.5.21**。
+>
+> 下面第 0–7 章是一份**按时间顺序的实录**：故事中途曾换成 27B（阶段二），但后来又**换回了 Flash-Next**（见 §2「阶段四」）。凡文中带"当前 / 现在跑的"字样的 **27B 数字，都是 2026-09 那一段的记录**，不代表今天的实时值；最新数字与回退方法见 §2 阶段四 与 [`archive/handover-flashnext-176b.md`](archive/handover-flashnext-176b.md)。
+
 ---
 
 ## 0. 一句话结论
@@ -15,6 +20,8 @@
 - **代价**：单流速度比云端 API 慢，但**不花一分钱**，数据不出内网
 
 一句话：**适合当"第二台免费的推理机"，不适合当唯一的、扛全公司流量的主力**。
+
+> （注：上面的 43 / 51 / 51 万 / 8 路 158 是**阶段二 27B** 那段的结论。机器**当前**又换回了 Flash-Next，实时数字见 §2 阶段四。）
 
 ---
 
@@ -101,7 +108,7 @@
 
 > 💡 **这里有个非常阴险的坑**（后面运维章节再强调）：这些非法参数**不会在启动时报错**，而是在**权重加载完成约 10 分钟后**才抛异常。而 systemd 配了 `Restart=always`，于是变成**每 10 分钟一轮的崩溃重启循环**。我们因此白烧了约 40 分钟。
 
-### 阶段二：换成 27B 模型（现在跑的就是它）
+### 阶段二：换成 27B 模型（27B 阶段，2026-09；后又换回，见阶段四）
 
 176B 虽然强，但每次只能用 4 路并发（QSA 的限制），而且占 203 GB 磁盘。换成 **Qwen3.8-27B-NVFP4** 后：
 
@@ -161,6 +168,27 @@ original_max_position_embeddings: 262144
 --max-running-requests 8           # 最多 8 个请求同时处理
 --speculative-num-draft-tokens 8   # 投机解码草稿长度
 ```
+
+### 阶段四：换回 Flash-Next，并把引擎升到 v0.5.21（当前，2026-10-02）
+
+故事没停在 27B。后来出于**超长文档首字更快**这个诉求，又把服务切回了 Flash-Next——**27B 的 unit 和权重都原样保留在机器上，`switch-model.sh stock` 随时能切回**。这次顺带把引擎从首部署用的**预览分支镜像**升到了**官方稳定版 `v0.5.21`**。
+
+**为什么敢升**：`v0.5.21` 已经把 Flash-Next 在 GB10 上赖以运行的 **file-backed PLE 表**合进稳定线（`qwen4_exp_ple_table.py`，sglang#39126），启动参数与本机逐字一致；`token-map` 走 `/out` 挂载、与引擎版本无关，可原样复用。所以**只换镜像那一行，其余参数一字未动**（PLE 文件卸载、NEXTN 投机 3/1/4、draft 词表裁剪 65536、mem-fraction 0.85、262144 上下文全保持）。
+
+**A/B 实测（同一个上游 `bench.sh` 协议，同一天两测）**：
+
+| 领域 | 预览版（首部署镜像） | v0.5.21 |
+|---|---|---|
+| code | 40.5 / 44.0 | 41.9 / 43.7 |
+| math peak | 39.0 / 42.5 | 41.4 / 44.2 |
+| prose（排除在 median 外） | 27.3 / 26.8 | 27.4 / 27.6 |
+| **greedy median** | **42.4** | **42.8** |
+
+→ **+0.9%，落在噪声/开机波动内，升级换不来速度。**
+
+**顺带纠正一个流传的数字**：常听到的"Flash-Next 稳定 47.9 tok/s"其实是**好开机那一次**的数——`bench.sh` 自己都打印警告"刚开机一批只有 38.8、后几批才 47.7–49.1"，同一台参考机跨开机从 28.6 一路飘到 49.1。本机常年 42 上下，**本就在这条波动带里**。真正的方差来自 **47.7 GiB PLE 表的页缓存冷暖（开机彩票）**，不是版本，也不是某个还能调的参数——投机解码参数早在阶段一就被 QSA 锁死在唯一合法点（`steps=3 / topk=1 / draft=4`），draft 调优根本没有空间。
+
+> Flash-Next 的实时运维数据、固化进 `install.sh` 的 `FLASH_IMAGE` pin、以及回退预览版的一条命令，都在 [`archive/handover-flashnext-176b.md`](archive/handover-flashnext-176b.md) 顶部的"更新记录"里。
 
 ---
 
@@ -263,7 +291,9 @@ original_max_position_embeddings: 262144
 | **切到纯命令行省资源换速度** | 实测桌面环境只占 **1.5–2 GiB**（121.6 GiB 的 1.3%），换算成 mem-fraction 只有 +1.6 个百分点。**对速度的直接收益接近于零** |
 | **加更多并发** | 32 路请求相比 8 路只快 12%，但首字等待慢 50 倍。**亏本买卖** |
 
-> **一句话总结**：这台机器上，**唯一还没验证过的提速空间是"放宽并发上限"**（同时改 `max-running-requests` 和 `cuda-graph-max-bs`），因为内存完全富余（KV 只用 18%）。这是下一步值得做的实验。
+> **一句话总结（27B 阶段）**：这台机器上，**唯一还没验证过的提速空间是"放宽并发上限"**（同时改 `max-running-requests` 和 `cuda-graph-max-bs`），因为内存完全富余（KV 只用 18%）。这是当时下一步值得做的实验。
+>
+> ⏭️ **后续更新（阶段四）**：换回 Flash-Next 后这条路走不通——它的 4 路并发由 QSA/mamba 状态池硬性决定，不是"内存富余就能加"；而 A/B 升级 v0.5.21 也证明换版本不提速。Flash-Next 单流的天花板就是接受长度上限 4，**剩余空间仅约 13% 且要靠提高接受率、加深 draft 会崩**（见阶段一）。
 
 ---
 
@@ -340,34 +370,39 @@ HuggingFace 直连只有 12.5 MB/s，ModelScope 有 40+ MB/s。**同样的文件
 
 ### 文件都在哪
 
+> 以下命令以**当前在跑的 Flash-Next** 为准。跑 27B lane 时把单元名 `qwen38-flash` 换成 `qwen38-sglang`、模型名 `qwen3.8-flash-next` 换成 `qwen3.8-27b`；`switch-model.sh` 只改配置不重启，改完仍需手动 `restart`。
+
 | 用途 | 路径 |
 |---|---|
-| **实际启动命令** | `/etc/systemd/system/qwen38-sglang.service`（启动命令直接写在这个文件里） |
+| **实际启动命令（flash）** | `~/.config/qwen38/launch-flash.sh`（由单元 ExecStart 调用；改参数改这里，别改 `.service`） |
+| 实际启动命令（27B） | `/etc/systemd/system/qwen38-sglang.service`（启动命令直接写在这个文件里） |
 | 保活代理 | `/etc/systemd/system/qwen38-keepalive.service` |
 | 配置与密钥目录 | `~/.config/qwen38/` |
 | 模型权重 | `~/.cache/huggingface/hub/` |
+| PLE 表（flash） | `~/flashnext-ple/`（每次开机整表重写，见 §6） |
 | 安装脚本仓库 | `~/dsh-work/repo/` |
 
 ### 常用命令
 
 ```bash
-# 看状态
-systemctl status qwen38-sglang
+# 看状态（当前跑的是 flash 单元）
+systemctl status qwen38-flash qwen38-keepalive
 
 # 看实时日志
-journalctl -u qwen38-sglang -f
+journalctl -u qwen38-flash -f
 
-# 重启（约 6–9 分钟，耐心等）
-sudo systemctl restart qwen38-sglang
+# 重启（flash 约 10–15 分钟——要重写 47.7 GiB PLE 表；27B 才 6–9 分钟）
+sudo systemctl restart qwen38-flash
 
-# 健康检查
+# 健康检查（引擎"ready to roll"后 30000 才起来；别在开机中途判定卡死）
 curl http://127.0.0.1:30000/health
 
-# 调用模型
+# 调用模型（关 thinking 直答；开 thinking 时正文在 reasoning_content 字段）
 KEY=$(cat ~/.config/qwen38/api-key)
 curl http://127.0.0.1:30000/v1/chat/completions \
   -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3.8-27b","messages":[{"role":"user","content":"你好"}]}'
+  -d '{"model":"qwen3.8-flash-next","messages":[{"role":"user","content":"你好"}],
+       "chat_template_kwargs":{"enable_thinking":false}}'
 ```
 
 ### 端口说明
@@ -379,12 +414,21 @@ curl http://127.0.0.1:30000/v1/chat/completions \
 
 ### 改参数的正确姿势
 
-⚠️ **不要直接编辑那个 `.service` 文件**——下次跑安装脚本会被覆盖。应该改**传给安装脚本的环境变量**：
+⚠️ **不要直接编辑 `.service` 文件**——下次跑安装脚本会被覆盖。**flash lane 改 `~/.config/qwen38/launch-flash.sh`**（TIER 那行 / `--mem-fraction-static` / 镜像行都在里面，改完 `restart`）；**27B lane 改传给 `install.sh` 的环境变量**：
 
 ```bash
+# Flash-Next（当前）：档位用环境变量重渲染，或直接编辑 launch-flash.sh
 cd ~/dsh-work/repo
-CONTEXT_MODE=1m ./install.sh        # 切换到 100 万上下文模式
-CONTEXT_MODE=native ./install.sh    # 切回原生 26 万
+FLASH_TIER=context     ./install.sh   # 4 并发 + 长上下文（当前档）
+FLASH_TIER=concurrency ./install.sh   # 8 并发，KV 池缩到约 1/3
+FLASH_TIER=throughput  ./install.sh   # 24 并发，关闭投机解码
+
+# 27B lane：上下文模式（1M 是 27B 专属，flash 没有 1M 模式）
+CONTEXT_MODE=1m     ./install.sh      # YaRN 100 万
+CONTEXT_MODE=native ./install.sh      # 原生 26 万
+
+# 换模型（只改配置、不重启；改完手动 restart 对应单元）
+./switch-model.sh stock|flash|...
 ```
 
 ---
